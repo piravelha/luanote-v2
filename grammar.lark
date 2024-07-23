@@ -1,0 +1,93 @@
+?start: chunk
+
+chunk: (stmt ";"?)*
+
+?stmt: var_decl
+     | func_decl
+     | func_call
+     | return_stmt
+     | if_stmt
+     | assign_stmt
+     | range_for_stmt
+     | reveal_type
+
+assign_stmt: prefix_expr "=" expr
+
+range_for_stmt: "for" NAME "=" expr "," expr "," expr "do" chunk "end"
+
+if_stmt: "if" expr "then" chunk elseif_branches else_branch "end"
+elseif_branches: elseif_branch*
+elseif_branch: "elseif" expr "then" chunk
+else_branch: ("else" chunk)?
+
+return_stmt: "return" expr
+
+func_decl: "local" "function" NAME func_body
+func_expr: "function" func_body
+func_body: param_list chunk "end" 
+param_list: "(" (NAME ("," NAME)*)? ")"
+
+var_decl: "local" NAME "=" expr
+
+func_call: primitive_expr arg_list
+arg_list: "(" (expr ("," expr)*)? ")"
+
+index_expr: primitive_expr "[" expr "]"
+prop_expr: primitive_expr "." NAME
+
+?expr: log_expr
+     | func_expr
+
+dict: "{" (dict_field ("," dict_field)* ","?)? "}"
+obj: "{" (obj_field ("," obj_field)* ","?)? "}"
+
+obj_field: NAME "=" expr
+dict_field: "[" expr "]" "=" expr | expr
+
+?log_expr: eq_expr LOG_OP log_expr | eq_expr
+?eq_expr: rel_expr EQ_OP eq_expr | rel_expr
+?rel_expr: add_expr REL_OP rel_expr | add_expr
+?add_expr: mul_expr ADD_OP add_expr | mul_expr
+?mul_expr: pow_expr MUL_OP mul_expr | pow_expr
+?pow_expr: unary_expr POW_OP pow_expr | unary_expr
+?unary_expr: UNARY_OP atom | atom
+
+?atom: NIL
+     | BOOLEAN
+     | STRING
+     | NUMBER
+     | dict
+     | obj
+     | primitive_expr
+
+?primitive_expr: prefix_expr
+               | func_call
+               | "(" expr ")"
+
+?prefix_expr: NAME
+            | prop_expr
+            | index_expr
+
+reveal_type: "--" "@reveal" expr
+
+LOG_OP: "and" | "or"
+EQ_OP: "==" | "~="
+REL_OP: "<" | "<=" | ">" | ">="
+ADD_OP: "+" | "-" | ".."
+MUL_OP: "*" | "/" | "%"
+POW_OP: "^"
+UNARY_OP: "-" | "not" | "#"
+
+NAME: /[a-zA-Z_]\w*/
+
+NIL: "nil"
+BOOLEAN: "true" | "false"
+STRING: /"[^"]*"/
+NUMBER: /-?\d+(\.\d+)?/
+COMMENT: /--(?!\s*@(reveal)).*/
+MULTI_COMMENT: /--\[\[.*\]\]/
+
+%import common.WS
+%ignore WS
+%ignore COMMENT
+%ignore MULTI_COMMENT
