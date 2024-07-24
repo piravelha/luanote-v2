@@ -6,13 +6,20 @@ local function map(arr, fn)
     end
     return new
 end
+--@reveal map
 
 local arr1 = {1, 2, 3}
+--@reveal arr1
 local arr2 = map(arr1, function(x)
     return tostring(x)
 end)
+--@reveal arr2
 local arr3 = map(arr2, function(x)
     return tonumber(x)
 end)
+--@reveal arr3
 
---@reveal arr2
+local x = arr3[1]
+if type(x) == "number" then
+  --@reveal x
+end

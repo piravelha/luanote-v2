@@ -4,7 +4,7 @@ from typing import Optional
 from lark import Token, Tree
 from parser import parser
 
-type Type = TypeVariable | TypeFunction | LiteralType | ConstraintType
+type Type = TypeVariable | TypeFunction | LiteralType | ConstraintType | UnionType
 type LiteralType = LiteralObjectType
 type ConstraintType = TypeOperator
 
@@ -45,6 +45,12 @@ class LiteralObjectType:
         raise ValueError(f"Cannot convert {d} to TypeFunction")
 
 @dataclass
+class UnionType:
+    left: Type
+    right: Type
+    returning: bool = False
+
+@dataclass
 class Substitution:
     raw: dict[str, Type]
     def __iadd__(self, other: 'Substitution') -> 'Substitution':
@@ -78,13 +84,26 @@ def type_repr(t: Type | Substitution) -> str:
             return f"({params}) -> {type_repr(t.args[-1])}"
         if t.name == "dict":
             if isinstance(t.args[0], TypeFunction) and t.args[0].name == "number":
-                return f"{type_repr(t.args[1])}[]"
+                r = type_repr(t.args[1])
+                if r.find(" ") > 0:
+                    return f"({r})[]"
+                return f"{r}[]"
             return f"{{[{type_repr(t.args[0])}]: {type_repr(t.args[1])}}}"
         if not t.args:
             return t.name
         return f"{t.name}<{', '.join([type_repr(a) for a in t.args])}>"
     if isinstance(t, LiteralObjectType):
         return f"{{{', '.join([f'{key}: {type_repr(value)}' for key, value in t.fields.items()])}}}"
+    if isinstance(t, UnionType):
+        if unifies(t.left, t.right):
+            return type_repr(t.right)
+        if unifies(t.right, t.left):
+            return type_repr(t.left)
+        if t.left == NilType:
+            return f"{type_repr(t.right)}?"
+        if t.right == NilType:
+            return f"{type_repr(t.left)}?"
+        return f"({type_repr(t.left)} | {type_repr(t.right)})"
     if isinstance(t, Substitution):
         return f"S{{{', '.join([
             f'{key} |-> {type_repr(value)}'
@@ -113,10 +132,21 @@ def apply(s: Substitution, t: Type) -> Type:
         return LiteralObjectType({key: apply(s, value) for key, value in t.fields.items()})
     if isinstance(t, TypeOperator):
         return t
+    if isinstance(t, UnionType):
+        return UnionType(apply(s, t.left), apply(s, t.right))
+    if isinstance(t, IntersectionType):
+        return IntersectionType(apply(s, t.left), apply(s, t.right))
     assert False, f"Not implemented: {t}"
 
 def combine(s1: Substitution, s2: Substitution) -> Substitution:
     return Substitution({**s1.raw, **s2.raw})
+
+def unifies(t1: Type, t2: Type) -> bool:
+    try:
+        unify(t1, t2, "")
+        return True
+    except ValueError:
+        return False
 
 def unify(t1: Type, t2: Type, loc: str) -> Substitution:
     if isinstance(t1, TypeVariable) and isinstance(t2, TypeVariable) and t1.name == t2.name:
@@ -143,6 +173,14 @@ def unify(t1: Type, t2: Type, loc: str) -> Substitution:
             case x if x in ["and","or"]:
                 unify(BooleanType, t1, loc)
         return Substitution({})
+    if isinstance(t1, UnionType):
+        if unifies(t1.left, t2) and unifies(t1.right, t2):
+            return Substitution({})
+        raise ValueError(f"{loc} Expected '{type_repr(t2)}', got '{type_repr(t1)}'")
+    if isinstance(t2, UnionType):
+        if unifies(t1, t2.left) or unifies(t1, t2.right):
+            return Substitution({})
+        raise ValueError(f"{loc} Expected '{type_repr(t2)}', got '{type_repr(t1)}'")
     if isinstance(t1, TypeFunction) and isinstance(t2, TypeFunction):
         if t1.name != t2.name:
             raise ValueError(f"{loc} Expected '{t2.name}', got '{t1.name}'")
@@ -270,6 +308,7 @@ def infer_unary_expr(op, expr, **kwargs) -> Inferred:
         s = unify(BooleanType, expr_expr, kwargs["loc"])
         s += expr_s
         return s, BooleanType
+    assert False, f"Not implemented: {op.value}"
 
 def infer_pow_expr(left, op, right, **kwargs) -> Inferred:
     left_s, left_expr = infer(left, **kwargs)
@@ -462,14 +501,42 @@ def infer_range_for_stmt(var, start, stop, step, body, **kwargs) -> Inferred:
     s += body_s
     return s, body_expr
 
+def gradual_if_inference_type_fn(args, right, **kwargs) -> None:
+    if len(args.children) != 1: return
+    arg = args.children[0]
+    if not isinstance(arg, Token) or arg.type != "NAME": return
+    if not isinstance(right, Token) or right.type != "STRING": return
+    value = kwargs["context"][arg.value]
+    if right.value[1:-1] in ["number", "string", "boolean", "nil"]:
+        kwargs["context"][arg.value] = TypeFunction(right.value[1:-1], [])
+        return
+    if right.value[1:-1] == "table":
+        kwargs["context"][arg.value] = DictType(new_type_variable(), new_type_variable())
+        return
+    return
+
+def gradual_if_inference(cond, **kwargs) -> None:
+    if isinstance(cond, Tree):
+        if cond.data == "eq_expr":
+            left, op, right = cond.children
+            assert isinstance(op, Token)
+            if left.data == "func_call" and op.value == "==":
+                func, args = left.children
+                if isinstance(func, Token) and func.value == "type":
+                    gradual_if_inference_type_fn(args, right, **kwargs)
+    return
+
 def infer_if_stmt(cond, body, elseifs, else_branch, **kwargs) -> Inferred:
     cond_s, cond_expr = infer(cond, **kwargs)
+    kwargs["context"] = kwargs["context"].copy()
+    gradual_if_inference(cond, **kwargs)
     s, body_expr = infer(body, **kwargs)
     s += unify(cond_expr, BooleanType, get_loc(cond))
     s += cond_s
     returns = body_expr.returning
     for elseif in elseifs.children:
         elseif_cond, elseif_body = elseif.children
+        gradual_if_inference(elseif_cond, **kwargs)
         elseif_cond_s, elseif_cond_expr = infer(elseif_cond, **kwargs)
         s += elseif_cond_s
         s += unify(elseif_cond_expr, BooleanType, get_loc(elseif_cond))
@@ -549,6 +616,14 @@ LUA_CONTEXT = {
         NilType,
     ),
     "tostring": FunctionType(
+        new_type_variable(),
+        StringType,
+    ),
+    "tonumber": FunctionType(
+        StringType,
+        UnionType(NumberType, NilType),
+    ),
+    "type": FunctionType(
         new_type_variable(),
         StringType,
     ),
