@@ -1,12 +1,11 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import TypeAlias
 
 from lark import Token, Tree
-from parser import parser
 
-type Type = TypeVariable | TypeFunction | LiteralType | ConstraintType | UnionType
-type LiteralType = LiteralObjectType
-type ConstraintType = TypeOperator
+Type: TypeAlias = 'TypeVariable | TypeFunction | LiteralType | ConstraintType | UnionType | RecursiveFunctionType | RecursiveType'
+LiteralType: TypeAlias = 'LiteralObjectType'
+ConstraintType: TypeAlias = 'TypeOperator'
 
 @dataclass
 class TypeVariable:
@@ -51,6 +50,18 @@ class UnionType:
     returning: bool = False
 
 @dataclass
+class RecursiveFunctionType:
+    name: str
+    func: Type
+    returning: bool = False
+
+@dataclass
+class RecursiveType:
+    name: str
+    func: Type
+    returning: bool = False
+
+@dataclass
 class Substitution:
     raw: dict[str, Type]
     def __iadd__(self, other: 'Substitution') -> 'Substitution':
@@ -68,7 +79,7 @@ def get_loc(t: Tree | Token) -> str:
 
 type_var_count = 0
 type_var_mappings = {}
-def type_repr(t: Type | Substitution) -> str:
+def type_repr(t: 'Type | Substitution') -> str:
     global type_var_count
     if isinstance(t, TypeVariable):
         letters = "abcdefghijklmnopqrstuvwxyz"
@@ -105,10 +116,11 @@ def type_repr(t: Type | Substitution) -> str:
             return f"{type_repr(t.left)}?"
         return f"({type_repr(t.left)} | {type_repr(t.right)})"
     if isinstance(t, Substitution):
-        return f"S{{{', '.join([
-            f'{key} |-> {type_repr(value)}'
-            for key, value in t.raw.items()
-        ])}}}"
+        return f"S{{{', '.join([f'{type_repr(TypeVariable(key))} |-> {type_repr(value)}' for key, value in t.raw.items()])}}}"
+    if isinstance(t, RecursiveFunctionType):
+      return f"u {type_repr(TypeVariable(t.name))}.{type_repr(t.func)}"
+    if isinstance(t, RecursiveType):
+      return f"r {type_repr(TypeVariable(t.name))}.{type_repr(t.func)}"
     assert False, f"Not implemented: {t}"
 
 NumberType = TypeFunction("number", [])
@@ -134,9 +146,10 @@ def apply(s: Substitution, t: Type) -> Type:
         return t
     if isinstance(t, UnionType):
         return UnionType(apply(s, t.left), apply(s, t.right))
-    if isinstance(t, IntersectionType):
-        return IntersectionType(apply(s, t.left), apply(s, t.right))
-    assert False, f"Not implemented: {t}"
+    if isinstance(t, RecursiveFunctionType):
+        return RecursiveFunctionType(t.name, apply(s, t.func))
+    if isinstance(t, RecursiveType):
+        return RecursiveType(t.name, apply(s, t.func))
 
 def combine(s1: Substitution, s2: Substitution) -> Substitution:
     return Substitution({**s1.raw, **s2.raw})
@@ -197,6 +210,12 @@ def unify(t1: Type, t2: Type, loc: str) -> Substitution:
         for key in t1.fields:
             s += unify(apply(s, t1.fields[key]), apply(s, t2.fields[key]), loc)
         return s
+    if isinstance(t1, RecursiveFunctionType) and isinstance(t2, RecursiveFunctionType):
+        assert t1.name == t2.name
+        return unify(t1.func, t2.func, loc)
+    if isinstance(t1, RecursiveType) and isinstance(t2, RecursiveType):
+        assert t1.name == t2.name
+        return unify(t1.func, t2.func, loc)
     raise ValueError(f"{loc} Expected '{type_repr(t2)}', got '{type_repr(t1)}'")
 
 new_type_variable_counter = 0
@@ -206,23 +225,27 @@ def new_type_variable() -> TypeVariable:
     new_type_variable_counter += 1
     return TypeVariable(f"{value}")
 
-type Inferred = tuple[Substitution, Type]
+Inferred: TypeAlias = tuple[Substitution, Type]
 
 def infer_reveal_type(expr, **kwargs) -> Inferred:
-    s, t = infer(expr, **kwargs)
-    print(f"{kwargs["loc"]} @reveal: {type_repr(t)}")
+    _, t = infer(expr, **kwargs)
+    print(f"{kwargs['loc']} @reveal: {type_repr(t)}")
     return Substitution({}), NilType
 
-def infer_number(token: Token, **kwargs) -> Inferred:
+def infer_number(_: Token, **_1) -> Inferred:
+    _1 = _1
     return Substitution({}), NumberType
 
-def infer_string(token: Token, **kwargs) -> Inferred:
+def infer_string(_: Token, **_1) -> Inferred:
+    _1 = _1
     return Substitution({}), StringType
 
-def infer_boolean(token: Token, **kwargs) -> Inferred:
+def infer_boolean(_: Token, **_1) -> Inferred:
+    _1 = _1
     return Substitution({}), BooleanType
 
-def infer_nil(token: Token, **kwargs) -> Inferred:
+def infer_nil(_: Token, **_1) -> Inferred:
+    _1 = _1
     return Substitution({}), NilType
 
 def infer_name(token: Token, **kwargs) -> Inferred:
@@ -268,11 +291,15 @@ def infer_prop_expr(obj, prop, **kwargs) -> Inferred:
         prop_type = new_type_variable()
         s = Substitution({obj_expr.name: LiteralObjectType({prop.value: prop_type})})
         return s, prop_type
+    if isinstance(obj_expr, RecursiveType):
+        self_type = new_type_variable()
+        val = obj.func.fields[prop.value]
+        :e 
     if not isinstance(obj_expr, LiteralObjectType):
-        raise ValueError(f"{kwargs["loc"]} Attempting to access property of non-object value: {type_repr(obj_expr)}")
+        raise ValueError(f"{kwargs['loc']} Attempting to access property of non-object value: {type_repr(obj_expr)}")
     prop_type = obj_expr.fields.get(prop.value)
     if not prop_type:
-        raise ValueError(f"{kwargs["loc"]} Object does not have property '{prop.value}'")
+        raise ValueError(f"{kwargs['loc']} Object does not have property '{prop.value}'")
     return obj_s, prop_type
 
 def infer_index_expr(obj, index, **kwargs) -> Inferred:
@@ -284,7 +311,7 @@ def infer_index_expr(obj, index, **kwargs) -> Inferred:
         s += obj_s
         return s, value_type
     if not isinstance(obj_expr, TypeFunction) or obj_expr.name != "dict":
-        raise ValueError(f"{kwargs["loc"]} Attempting to index non-dictionary value: {type_repr(obj_expr)}")
+        raise ValueError(f"{kwargs['loc']} Attempting to index non-dictionary value: {type_repr(obj_expr)}")
     s, index_type = infer(index, **kwargs)
     value_type = obj_expr.args[1]
     s += unify(index_type, obj_expr.args[0], kwargs["loc"])
@@ -356,7 +383,7 @@ def infer_eq_expr(left, op, right, **kwargs) -> Inferred:
     s = unify(TypeOperator(op.value), left_expr, kwargs["loc"])
     s += unify(TypeOperator(op.value), right_expr, kwargs["loc"])
     if not unifies(left_expr, right_expr) and not unifies(right_expr, left_expr):
-        raise ValueError(f"{kwargs["loc"]} Cannot compare '{type_repr(left_expr)}' with '{type_repr(right_expr)}'")
+        raise ValueError(f"{kwargs['loc']} Cannot compare '{type_repr(left_expr)}' with '{type_repr(right_expr)}'")
     if unifies(left_expr, right_expr):
         s += unify(left_expr, right_expr, kwargs["loc"])
     if unifies(right_expr, left_expr):
@@ -392,7 +419,7 @@ def set_prefix_expr(tree: Tree, expr: Type, **kwargs) -> None:
 
     path = get_type(tree, **kwargs)
 
-    def run(tree: Tree, path: Type, **kwargs) -> tuple[Type, Type | str]:
+    def run(tree: Tree, path: Type, **kwargs) -> tuple[Type, 'Type | str']:
         if isinstance(tree, Token):
             assert tree.type == "NAME"
             return path, tree.value
@@ -464,8 +491,8 @@ def infer_func_call(func, args, **kwargs) -> Inferred:
             s += arg_s
             s += unify(arg_expr, param_type, kwargs["loc"])
         return s, apply(s, return_type)
-    if not isinstance(func_expr, TypeFunction) or func_expr.name != "function":
-        raise ValueError(f"{kwargs["loc"]} Attempting to call non-function value: {type_repr(func_expr)}")
+    if (not isinstance(func_expr, TypeFunction) or func_expr.name != "function") and not isinstance(func_expr, RecursiveFunctionType):
+        raise ValueError(f"{kwargs['loc']} Attempting to call non-function value: {type_repr(func_expr)}")
     arg_s = Substitution({})
     arg_types = []
     for arg in args.children:
@@ -473,17 +500,40 @@ def infer_func_call(func, args, **kwargs) -> Inferred:
         arg_s += arg_expr_s
         arg_types.append(arg_expr)
     s = Substitution({})
-    new_args = func_expr.args[:-1]
+    if isinstance(func_expr, TypeFunction):
+        new_args = func_expr.args[:-1]
+        for i, (arg_type, param_type) in enumerate(zip(arg_types, new_args)):
+            s += unify(arg_type, param_type, arg_locs[i])
+        s += func_s
+        return s, apply(s, func_expr.args[-1])
+    new_args = func_expr.func.args[:-1]
+    self_type = new_type_variable()
+    fn = FunctionType(*arg_types, self_type)
+    s = Substitution({func_expr.name: fn})
     for i, (arg_type, param_type) in enumerate(zip(arg_types, new_args)):
         s += unify(arg_type, param_type, arg_locs[i])
     s += func_s
-    return s, apply(s, func_expr.args[-1])    
+    rec = RecursiveType(self_type.name, func_expr.func.args[-1])
+    return s, apply(s, rec)
 
 def infer_func_decl(name, func, **kwargs) -> Inferred:
-    kwargs["context"][name.value] = new_type_variable()
-    func_s, func_expr = infer(func, **kwargs)
-    kwargs["context"][name.value] = func_expr
-    return func_s, func_expr
+    params, body = func.children  
+    param_types = [new_type_variable() for _ in params.children]
+    ctx = kwargs["context"]
+    ret = new_type_variable()
+    ctx[name.value] = FunctionType(*param_types, ret)
+    kwargs["context"] = kwargs["context"].copy()
+    kwargs["context"].update({
+        param.value: t
+        for param, t in zip(params.children, param_types)
+    })
+    body_s, body_expr = infer(body, **kwargs)
+    rec = RecursiveFunctionType(ret.name, FunctionType(*param_types, body_expr))
+    ctx[name.value] = apply(body_s, rec)
+    return body_s, ctx[name.value]
+
+
+
 
 def infer_return_stmt(expr, **kwargs) -> Inferred:
     s, t = infer(expr, **kwargs)

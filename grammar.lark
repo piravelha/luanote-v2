@@ -2,6 +2,13 @@
 
 chunk: (stmt ";"?)*
 
+type_hint: ("--%type" type)?
+
+?type: PRIMITIVE_TYPE
+     | lit_number_type
+
+lit_number_type: NUMBER
+
 ?stmt: var_decl
      | func_decl
      | func_call
@@ -69,6 +76,8 @@ dict_field: "[" expr "]" "=" expr | expr
             | index_expr
 
 reveal_type: "--" "@reveal" expr
+
+PRIMITIVE_TYPE: "number" | "string" | "boolean" | "nil"
 
 LOG_OP: "and" | "or"
 EQ_OP: "==" | "~="

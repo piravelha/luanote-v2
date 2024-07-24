@@ -1,25 +1,19 @@
 
-local function map(arr, fn)
-    local new = {}
-    for i = 1, #arr, 1 do
-        new[i] = fn(arr[i])
-    end
-    return new
+local function Array(values)
+  return {
+    values = values,
+    map = function(self, fn)
+      local new = {}
+      for i = 1, #(self.values), 1 do
+        new[i] = fn(self.values[i])
+      end
+      return Array(new)
+    end,
+  }
 end
---@reveal map
 
-local arr1 = {1, 2, 3}
---@reveal arr1
-local arr2 = map(arr1, function(x)
-    return tostring(x)
-end)
---@reveal arr2
-local arr3 = map(arr2, function(x)
-    return tonumber(x)
-end)
---@reveal arr3
-
-local x = arr3[1]
-if x == 123 then
-  --@reveal x
+local function rec(x)
+  return rec
 end
+
+--@reveal Array({1}).map
