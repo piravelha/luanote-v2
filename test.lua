@@ -20,6 +20,6 @@ end)
 --@reveal arr3
 
 local x = arr3[1]
-if type(x) == "number" then
+if x == 123 then
   --@reveal x
 end

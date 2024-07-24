@@ -355,7 +355,12 @@ def infer_eq_expr(left, op, right, **kwargs) -> Inferred:
     right_s, right_expr = infer(right, **kwargs)
     s = unify(TypeOperator(op.value), left_expr, kwargs["loc"])
     s += unify(TypeOperator(op.value), right_expr, kwargs["loc"])
-    s += unify(left_expr, right_expr, kwargs["loc"])
+    if not unifies(left_expr, right_expr) and not unifies(right_expr, left_expr):
+        raise ValueError(f"{kwargs["loc"]} Cannot compare '{type_repr(left_expr)}' with '{type_repr(right_expr)}'")
+    if unifies(left_expr, right_expr):
+        s += unify(left_expr, right_expr, kwargs["loc"])
+    if unifies(right_expr, left_expr):
+        s += unify(right_expr, left_expr, kwargs["loc"])
     s += left_s
     s += right_s
     return s, BooleanType
@@ -506,7 +511,6 @@ def gradual_if_inference_type_fn(args, right, **kwargs) -> None:
     arg = args.children[0]
     if not isinstance(arg, Token) or arg.type != "NAME": return
     if not isinstance(right, Token) or right.type != "STRING": return
-    value = kwargs["context"][arg.value]
     if right.value[1:-1] in ["number", "string", "boolean", "nil"]:
         kwargs["context"][arg.value] = TypeFunction(right.value[1:-1], [])
         return
@@ -516,14 +520,18 @@ def gradual_if_inference_type_fn(args, right, **kwargs) -> None:
     return
 
 def gradual_if_inference(cond, **kwargs) -> None:
-    if isinstance(cond, Tree):
-        if cond.data == "eq_expr":
-            left, op, right = cond.children
-            assert isinstance(op, Token)
-            if left.data == "func_call" and op.value == "==":
-                func, args = left.children
-                if isinstance(func, Token) and func.value == "type":
-                    gradual_if_inference_type_fn(args, right, **kwargs)
+    if not isinstance(cond, Tree): return
+    if cond.data != "eq_expr": return
+    left, op, right = cond.children
+    assert isinstance(op, Token)
+    if isinstance(left, Tree) and left.data == "func_call" and op.value == "==":
+        func, args = left.children
+        if isinstance(func, Token) and func.value == "type":
+            gradual_if_inference_type_fn(args, right, **kwargs)
+        return
+    if isinstance(left, Token) and left.type == "NAME":
+        _, right_expr = infer(right, **kwargs)
+        kwargs["context"][left.value] = right_expr
     return
 
 def infer_if_stmt(cond, body, elseifs, else_branch, **kwargs) -> Inferred:
